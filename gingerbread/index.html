@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Android Gingerbread Easter Egg</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            user-select: none;
+        }
+        /* ImageViewの ScaleType.FIT_CENTER を再現 */
+        #content {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            cursor: pointer;
+        }
+        /* AndroidのToast（通知）をWebで再現 */
+        .android-toast {
+            position: fixed;
+            bottom: 50px;
+            background: rgba(50, 50, 50, 0.9);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            box-shadow: 0px 3px 6px rgba(0,0,0,0.3);
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .android-toast.show { opacity: 1; }
+    </style>
+</head>
+<body>
+
+    <!-- ImageView の代わり -->
+    <img id="content" src="g_platlogo.jpg" alt="PlatLogo">
+
+    <!-- Toast の代わり -->
+    <div id="toast" class="android-toast"></div>
+
+    <script src="main.js"></script>
+</body>
+</html>
