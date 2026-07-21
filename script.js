@@ -37,6 +37,12 @@ const easterEggs = [
         path: "kitkat/index.html",
         logo: "kitkat/k_android_logo.webp"
     },
+        {
+        id: "lollipop",
+        name: "Lollipop (Android 5.0)",
+        path: "lollipop/index.html",
+        logo: "lollipop/l_android_logo.webp"
+    },
 ];
 
 // （※以下の DOMContentLoaded などの処理は、前回提供したコードから変更ありません。このまま上の配列を上書きすればOKです！）
