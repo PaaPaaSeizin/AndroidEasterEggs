@@ -8,6 +8,12 @@ const easterEggs = [
         logo: "gingerbread/g_android_logo.webp"
     },
     {
+        id: "honeycomb",
+        name: "Honeycomb (Android 3.0 - 3.2)",
+        path: "honeycomb/index.html",
+        logo: "honeycomb/h_android_logo.webp"
+    },
+    {
         id: "icecreamsandwich",
         name: "Ice Cream Sandwich (Android 4.0)",
         path: "icecreamsandwich/index.html",
@@ -24,7 +30,13 @@ const easterEggs = [
         name: "Jelly Bean (Android 4.1 - 4.3)",
         path: "jellybean/index.html",
         logo: "jellybean/j_platlogo.webp"
-    }
+    },
+    {
+        id: "kitkat",
+        name: "Kitkat (Android 4.4)",
+        path: "kitkat/index.html",
+        logo: "kitkat/k_android_logo.webp"
+    },
 ];
 
 // （※以下の DOMContentLoaded などの処理は、前回提供したコードから変更ありません。このまま上の配列を上書きすればOKです！）
