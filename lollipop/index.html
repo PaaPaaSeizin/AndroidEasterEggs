@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Android Lollipop Easter Egg (PlatLogo & LLand)</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #ECEFF1;
+            touch-action: none;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+/**
+ * Android Lollipop Easter Egg (PlatLogo & LLand) - Faithful HTML5 Canvas Port
+ */
+
+// --- 本家の定数定義 (lland_config.xml / LLand.java 準拠) ---
+const PARAMS = {
+    TRANSLATION_PER_SEC: 100,
+    OBSTACLE_SPACING: 380,
+    BOOST_DV: 550,
+    PLAYER_HIT_SIZE: 40,
+    PLAYER_SIZE: 40,
+    OBSTACLE_WIDTH: 90,
+    OBSTACLE_STEM_WIDTH: 12,
+    OBSTACLE_GAP: 170,
+    OBSTACLE_MIN: 40,
+    BUILDING_WIDTH_MIN: 20,
+    BUILDING_WIDTH_MAX: 250,
+    BUILDING_HEIGHT_MIN: 20,
+    CLOUD_SIZE_MIN: 10,
+    CLOUD_SIZE_MAX: 100,
+    STAR_SIZE_MIN: 3,
+    STAR_SIZE_MAX: 5,
+    G: 30,
+    MAX_V: 1000,
+};
+PARAMS.OBSTACLE_PERIOD = Math.floor(PARAMS.OBSTACLE_SPACING / PARAMS.TRANSLATION_PER_SEC);
+
+// 本家の空のグラデーション色 (SKIES)
+const SKIES = [
+    ["#c0c0FF", "#a0a0FF"], // DAY
+    ["#000010", "#000000"], // NIGHT
+    ["#000040", "#000010"], // TWILIGHT
+    ["#a08020", "#204080"], // SUNSET
+];
+
+// 本家のロリポップフレーバー配色 (FLAVORS: メイン色, サブ色/リップル色)
+const FLAVORS = [
+    "#9C27B0", "#BA68C8", // 0: grape
+    "#FF9800", "#FFB74D", // 2: orange
+    "#F06292", "#F8BBD0", // 4: bubblegum (pink)
+    "#AFB42B", "#CDDC39", // 6: lime
+    "#FFEB3B", "#FFF176", // 8: lemon
+    "#795548", "#A1887F", // 10: mystery flavor
+];
+
+// 本家のPOPS配列構造 (タイプ, 回転フラグ, 固定フレーバーインデックス)
+const POPS = [
+    { name: 'l_pop_belt', spin: 0, flavorIdx: 0 },
+    { name: 'l_pop_droid', spin: 0, flavorIdx: 6 },
+    { name: 'l_pop_pizza', spin: 1, flavorIdx: 2 },
+    { name: 'l_pop_stripes', spin: 0, flavorIdx: 4 },
+    { name: 'l_pop_swirl', spin: 1, flavorIdx: 8 },
+    { name: 'l_pop_vortex', spin: 1, flavorIdx: 10 },
+    { name: 'l_pop_vortex2', spin: 1, flavorIdx: 0 }
+];
+
+// --- アセット管理 ---
+const imageNames = [
+    'l_platlogo', 'l_android', 'l_cloud', 'l_cloud_off', 'l_star', 'l_moon', 'l_sun',
+    'l_pop_belt', 'l_pop_droid', 'l_pop_pizza', 'l_pop_stripes', 'l_pop_swirl', 
+    'l_pop_vortex', 'l_pop_vortex2', 'l_scorecard', 'l_scorecard_gameover'
+];
+const assets = {};
+imageNames.forEach(name => {
+    let img = new Image();
+    img.src = name + '.png';
+    assets[name] = img;
+});
+
+// --- ユーティリティ ---
+function frand(a = 0, b = 1) { return a + Math.random() * (b - a); }
+function irand(a, b) { return Math.floor(frand(a, b)); }
+function lerp(x, a, b) { return (b - a) * x + a; }
+function rlerp(v, a, b) { return (v - a) / (b - a); }
+function clamp(f) { return f < 0 ? 0 : f > 1 ? 1 : f; }
+
+// 本家の PathInterpolator(0f, 0f, 0.5f, 1f) 近似
+function cubicBezier(t) {
+    let p2x = 0.5, p2y = 1.0;
+    return (3 * (1 - t) * t * t * p2y) + (t * t * t);
+}
+
+// --- エンジン設定 ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let w = window.innerWidth;
+let h = window.innerHeight;
+
+window.addEventListener('resize', () => {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+});
+canvas.width = w; canvas.height = h;
+
+const STATE_PLATLOGO = 0;
+const STATE_GAME = 1;
+const STATE_GAMEOVER = 2;
+
+let currentState = STATE_PLATLOGO;
+
+// --- PlatLogo (スタート画面) の状態 ---
+let platLogo = {
+    tapCount: 0,
+    scale: 0.3,
+    colorIdx: 0,
+    animating: false,
+    stickAlpha: 0,
+    logoAlpha: 0,
+    z: 20
+};
+
+// --- LLand (ゲーム本体) の状態 ---
+let mTimeOfDay = 0;
+let mScore = 0;
+let mFrozen = false;
+let t = 0, lastTime = 0;
+let mLastPipeTime = 0;
+let mFlipped = false;
+let sceneryList = [];
+let obstaclesInPlay = [];
+
+// スコアHUDのアニメーション用Y座標
+let scoreHudY = -150;
+let scoreTargetY = -150;
+
+// プレイヤー定義
+let droid = {
+    x: 0, y: 0,
+    dv: 0,
+    mBoosting: false,
+    scale: 1,
+    rotation: 0,
+    corners: new Array(16),
+    sHull: [
+        0.3, 0,    0.7, 0,
+        0.92, 0.33, 0.92, 0.75,
+        0.6, 1,    0.4, 1,
+        0.08, 0.75, 0.08, 0.33
+    ],
+    prepareCheckIntersections: function() {
+        const inset = (PARAMS.PLAYER_SIZE - PARAMS.PLAYER_HIT_SIZE) / 2;
+        const scale = PARAMS.PLAYER_HIT_SIZE;
+        const N = this.sHull.length / 2;
+        const cos = Math.cos(this.rotation * Math.PI / 180);
+        const sin = Math.sin(this.rotation * Math.PI / 180);
+        const cx = PARAMS.PLAYER_SIZE / 2;
+        const cy = PARAMS.PLAYER_SIZE / 2;
+
+        for (let i = 0; i < N; i++) {
+            let px = scale * this.sHull[i * 2] + inset;
+            let py = scale * this.sHull[i * 2 + 1] + inset;
+            let dx = px - cx;
+            let dy = py - cy;
+            this.corners[i * 2] = this.x + cx + (dx * cos - dy * sin) * this.scale;
+            this.corners[i * 2 + 1] = this.y + cy + (dx * sin + dy * cos) * this.scale;
+        }
+    },
+    below: function(height) {
+        for (let i = 0; i < this.corners.length / 2; i++) {
+            if (this.corners[i * 2 + 1] >= height) return true;
+        }
+        return false;
+    }
+};
+
+function resetGame() {
+    mTimeOfDay = irand(0, SKIES.length);
+    mFlipped = frand() > 0.5;
+    mScore = 0;
+    obstaclesInPlay = [];
+    sceneryList = [];
+    t = 0;
+    mLastPipeTime = -PARAMS.OBSTACLE_PERIOD;
+    scoreHudY = -150;
+    scoreTargetY = 32;
+
+    // 天体 (太陽/月)
+    let showingSun = (mTimeOfDay === 0 || mTimeOfDay === 3) && frand() > 0.25;
+    if (showingSun) {
+        sceneryList.push({ type: 'sun', x: frand(45, w - 45), y: mTimeOfDay === 0 ? frand(45, h * 0.66) : frand(h * 0.66, h - 45), w: 45 });
+    } else {
+        let dark = mTimeOfDay === 1 || mTimeOfDay === 2;
+        if ((dark && frand() < 0.75) || frand() < 0.5) {
+            sceneryList.push({ type: 'moon', x: frand(45, w - 45), y: frand(45, h - 45), r: frand() > 0.5 ? -1 : 1, rot: frand(5, 30), alpha: dark ? 1 : 0.5 });
+        }
+    }
+
+    // 雲、星、ビル
+    const mh = h / 6;
+    const cloudless = frand() < 0.25;
+    for (let i = 0; i < 20; i++) {
+        let r1 = frand();
+        let s = { x: frand(-250, w + 250), z: i / 20 };
+        if (r1 < 0.3 && mTimeOfDay !== 0) {
+            s.type = 'star';
+            s.w = irand(PARAMS.STAR_SIZE_MIN, PARAMS.STAR_SIZE_MAX);
+            s.y = frand(0, h);
+            s.v = 0;
+        } else if (r1 < 0.6 && !cloudless) {
+            s.type = 'cloud';
+            s.w = irand(PARAMS.CLOUD_SIZE_MIN, PARAMS.CLOUD_SIZE_MAX);
+            s.y = frand(0, h / 2);
+            s.v = frand(0.15, 0.5);
+            s.off = frand() < 0.01;
+        } else {
+            s.type = 'building';
+            s.w = irand(PARAMS.BUILDING_WIDTH_MIN, PARAMS.BUILDING_WIDTH_MAX);
+            s.h = irand(PARAMS.BUILDING_HEIGHT_MIN, mh);
+            s.y = h;
+            s.v = 0.85 * s.z;
+            s.c = `hsl(175, 25%, ${s.z * 100}%)`;
+        }
+        sceneryList.push(s);
+    }
+
+    droid.x = w / 2;
+    droid.y = h / 2;
+    droid.dv = 0;
+    droid.mBoosting = false;
+    droid.rotation = 0;
+}
+
+// --- 操作入力処理 ---
+function poke() {
+    if (currentState === STATE_PLATLOGO) {
+        if (platLogo.tapCount === 0) {
+            platLogo.animating = true;
+            let start = performance.now();
+            let anim = function(now) {
+                let elapsed = now - start;
+                
+                // 本家のAnimatorスケジュール再現
+                let prog1 = clamp((elapsed - 500) / 700);
+                if (prog1 > 0) {
+                    let ease1 = cubicBezier(prog1);
+                    platLogo.z = lerp(ease1, 20, 40);
+                    platLogo.scale = lerp(ease1, 0.3, 1.0);
+                }
+
+                let progLogo = clamp((elapsed - 1000) / 500);
+                platLogo.logoAlpha = cubicBezier(progLogo);
+
+                let progStick = clamp((elapsed - 750) / 700);
+                platLogo.stickAlpha = cubicBezier(progStick);
+
+                if (prog1 < 1 || progLogo < 1 || progStick < 1) requestAnimationFrame(anim);
+            };
+            requestAnimationFrame(anim);
+        } else {
+            platLogo.colorIdx = irand(0, FLAVORS.length / 2) * 2;
+        }
+        platLogo.tapCount++;
+        return;
+    }
+
+    if (mFrozen) return;
+    if (currentState === STATE_GAMEOVER) {
+        resetGame();
+        currentState = STATE_GAME;
+    }
+
+    droid.mBoosting = true;
+    droid.dv = -PARAMS.BOOST_DV;
+    droid.scale = 1.25;
+}
+
+function unpoke() {
+    if (mFrozen || currentState !== STATE_GAME) return;
+    droid.mBoosting = false;
+    droid.scale = 1.0;
+}
+
+function handleLongClick() {
+    if (currentState === STATE_PLATLOGO && platLogo.tapCount >= 5) {
+        currentState = STATE_GAME;
+        resetGame();
+    }
+}
+
+let longClickTimer;
+window.addEventListener('pointerdown', (e) => {
+    poke();
+    longClickTimer = setTimeout(handleLongClick, 500);
+});
+window.addEventListener('pointerup', () => {
+    clearTimeout(longClickTimer);
+    unpoke();
+});
+window.addEventListener('keydown', (e) => {
+    if (['Space', 'Enter', 'ArrowUp'].includes(e.code)) { poke(); }
+});
+window.addEventListener('keyup', (e) => {
+    if (['Space', 'Enter', 'ArrowUp'].includes(e.code)) { unpoke(); }
+});
+
+// --- メインループ ---
+function step(now) {
+    if (!lastTime) lastTime = now;
+    let dt_ms = now - lastTime;
+    lastTime = now;
+    let dt = dt_ms / 1000;
+
+    if (currentState === STATE_GAME) {
+        t += dt;
+
+        // HUDスライドイン
+        scoreHudY += (scoreTargetY - scoreHudY) * 0.1;
+
+        // 背景オブジェクトの移動
+        sceneryList.forEach(s => {
+            s.x -= PARAMS.TRANSLATION_PER_SEC * dt * s.v;
+            if (s.x + s.w < 0) s.x = w;
+        });
+
+        // 物理演算
+        if (!droid.mBoosting) droid.dv += PARAMS.G;
+        if (droid.dv < -PARAMS.MAX_V) droid.dv = -PARAMS.MAX_V;
+        else if (droid.dv > PARAMS.MAX_V) droid.dv = PARAMS.MAX_V;
+
+        droid.y += droid.dv * dt;
+        if (droid.y < 0) droid.y = 0;
+
+        droid.rotation = 90 + lerp(clamp(rlerp(droid.dv, PARAMS.MAX_V, -PARAMS.MAX_V)), 90, -90);
+        droid.prepareCheckIntersections();
+
+        // 障害物の生成
+        if ((t - mLastPipeTime) > PARAMS.OBSTACLE_PERIOD) {
+            mLastPipeTime = t;
+            let obstacley = irand(PARAMS.OBSTACLE_MIN, h - PARAMS.OBSTACLE_MIN - PARAMS.OBSTACLE_GAP);
+            let inset = (PARAMS.OBSTACLE_WIDTH - PARAMS.OBSTACLE_STEM_WIDTH) / 2;
+            let yinset = PARAMS.OBSTACLE_WIDTH / 2;
+
+            let popIdx1 = irand(0, POPS.length);
+            let popIdx2 = irand(0, POPS.length);
+            // ロリポップごとの固定配色を割り当て
+            let flavorIdx1 = POPS[popIdx1].flavorIdx;
+            let flavorIdx2 = POPS[popIdx2].flavorIdx;
+
+            // 上の障害物
+            obstaclesInPlay.push({ type: 'stem', x: w + inset, y: 0, w: PARAMS.OBSTACLE_STEM_WIDTH, h: obstacley - yinset, passed: false });
+            obstaclesInPlay.push({ 
+                type: 'pop', x: w, y: obstacley - PARAMS.OBSTACLE_WIDTH, w: PARAMS.OBSTACLE_WIDTH, 
+                popType: popIdx1, flavorIdx: flavorIdx1,
+                spin: POPS[popIdx1].spin ? (frand() < 0.5 ? -1 : 1) : 0, rot: 0, flip: frand() < 0.5 ? -1 : 1 
+            });
+
+            // 下の障害物
+            obstaclesInPlay.push({ type: 'stem', x: w + inset, y: obstacley + PARAMS.OBSTACLE_GAP + yinset, w: PARAMS.OBSTACLE_STEM_WIDTH, h: h, shadow: true, passed: false });
+            obstaclesInPlay.push({ 
+                type: 'pop', x: w, y: obstacley + PARAMS.OBSTACLE_GAP, w: PARAMS.OBSTACLE_WIDTH, 
+                popType: popIdx2, flavorIdx: flavorIdx2,
+                spin: POPS[popIdx2].spin ? (frand() < 0.5 ? -1 : 1) : 0, rot: 0, flip: frand() < 0.5 ? -1 : 1 
+            });
+        }
+
+        // 障害物の移動 & 衝突判定
+        let passedBarrier = false;
+        for (let i = obstaclesInPlay.length - 1; i >= 0; i--) {
+            let ob = obstaclesInPlay[i];
+            ob.x -= PARAMS.TRANSLATION_PER_SEC * dt;
+            if (ob.type === 'pop' && ob.spin !== 0) ob.rot += dt * 45 * ob.spin;
+
+            let hitRect = { left: ob.x, right: ob.x + ob.w, top: ob.y, bottom: ob.type === 'stem' ? ob.y + ob.h : ob.y + ob.w };
+
+            let hit = false;
+            if (ob.type === 'pop') {
+                let cx = (hitRect.left + hitRect.right) / 2;
+                let cy = (hitRect.top + hitRect.bottom) / 2;
+                let r = ob.w / 2;
+                for (let j = 0; j < droid.corners.length / 2; j++) {
+                    let dx = droid.corners[j * 2] - cx;
+                    let dy = droid.corners[j * 2 + 1] - cy;
+                    if (Math.hypot(dx, dy) <= r) hit = true;
+                }
+            } else {
+                for (let j = 0; j < droid.corners.length / 2; j++) {
+                    let px = droid.corners[j * 2];
+                    let py = droid.corners[j * 2 + 1];
+                    if (px >= hitRect.left && px <= hitRect.right && py >= hitRect.top && py <= hitRect.bottom) hit = true;
+                }
+            }
+
+            if (hit) {
+                currentState = STATE_GAMEOVER;
+                mFrozen = true;
+                setTimeout(() => mFrozen = false, 250);
+            }
+
+            if (!ob.passed && hitRect.right < Math.min(...droid.corners.filter((_, idx) => idx % 2 === 0))) {
+                ob.passed = true;
+                if (ob.type === 'stem') passedBarrier = true;
+            }
+
+            if (ob.x + ob.w < 0) obstaclesInPlay.splice(i, 1);
+        }
+
+        if (passedBarrier) mScore++;
+
+        if (droid.below(h)) {
+            currentState = STATE_GAMEOVER;
+            mFrozen = true;
+            setTimeout(() => mFrozen = false, 250);
+        }
+    }
+
+    draw();
+    requestAnimationFrame(step);
+}
+
+// --- 本家グラフィック描画関数群 ---
+
+// 本家Pop（キャンディ部分）の正確なグラフィック描画
+function drawLollipopPattern(ctx, popType, size, colorMain, colorSub, imgAsset) {
+    let r = size / 2;
+
+    // 1. 必ず下地にベース円を描画
+    ctx.fillStyle = colorMain;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 2. 画像アセットが正常にロードされている場合は画像をオーバーレイ描画
+    if (imgAsset && imgAsset.complete && imgAsset.naturalWidth > 0) {
+        ctx.drawImage(imgAsset, -r, -r, size, size);
+        return;
+    }
+
+    // 3. ベクターフォールバック描画
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.clip(); // 円形にクリッピング
+
+    ctx.fillStyle = colorSub;
+    ctx.strokeStyle = colorSub;
+
+    switch(popType) {
+        case 0: // l_pop_belt (中央を横切る帯)
+            ctx.fillRect(-r, -r * 0.3, size, r * 0.6);
+            ctx.fillStyle = "rgba(255,255,255,0.8)";
+            ctx.fillRect(-r, -r * 0.1, size, r * 0.2);
+            break;
+
+        case 1: // l_pop_droid (ドロイド君シルエット)
+            ctx.fillStyle = "#FFFFFF";
+            ctx.beginPath();
+            ctx.arc(0, -r*0.1, r*0.4, Math.PI, 0); // 頭部
+            ctx.fill();
+            ctx.fillRect(-r*0.4, -r*0.05, r*0.8, r*0.5); // 胴体
+            break;
+
+        case 2: // l_pop_pizza (ピザ風の扇型切替)
+            for (let i = 0; i < 8; i += 2) {
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.arc(0, 0, r, (i * Math.PI) / 4, ((i + 1) * Math.PI) / 4);
+                ctx.closePath();
+                ctx.fill();
+            }
+            break;
+
+        case 3: // l_pop_stripes (斜めストライプ - 中心軸基準で傾きバグを解消)
+            ctx.lineWidth = r * 0.22;
+            for (let d = -size; d <= size; d += r * 0.45) {
+                ctx.beginPath();
+                let offset = d * Math.SQRT1_2;
+                ctx.moveTo(-r * 1.5 + offset, -r * 1.5 - offset);
+                ctx.lineTo(r * 1.5 + offset, r * 1.5 - offset);
+                ctx.stroke();
+            }
+            break;
+
+        case 4: // l_pop_swirl (渦巻き 2色)
+            ctx.lineWidth = r * 0.2;
+            for (let i = 0; i < 3; i++) {
+                ctx.beginPath();
+                ctx.arc(0, 0, (r * (i + 1)) / 3, i, i + Math.PI * 1.2);
+                ctx.stroke();
+            }
+            break;
+
+        case 5: // l_pop_vortex (多層渦巻き)
+        case 6: // l_pop_vortex2
+            for (let i = 0; i < 12; i++) {
+                ctx.fillStyle = i % 2 === 0 ? colorSub : "rgba(255,255,255,0.8)";
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.arc(0, 0, r, (i * Math.PI) / 6, ((i + 0.8) * Math.PI) / 6);
+                ctx.closePath();
+                ctx.fill();
+            }
+            break;
+    }
+
+    // ハイライト (OvalShape)
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.beginPath();
+    ctx.arc(-r * 0.2, -r * 0.2, r * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+}
+
+// 描画メイン処理
+function draw() {
+    ctx.clearRect(0, 0, w, h);
+
+    const isReady = (img) => img && img.complete && img.naturalWidth > 0;
+
+    if (currentState === STATE_PLATLOGO) {
+        // --- PlatLogo (スタート画面) ---
+        let size = Math.min(Math.min(w, h), 600) - 100;
+        let cx = w / 2;
+        let cy = h / 2;
+
+        // 棒 (Stick)
+        ctx.save();
+        ctx.globalAlpha = platLogo.stickAlpha;
+        let stickW = 32;
+
+        let stickGradient = ctx.createLinearGradient(cx - stickW/2, 0, cx + stickW/2, 0);
+        stickGradient.addColorStop(0, "#FFFFFF");
+        stickGradient.addColorStop(0.75, "#FFFFFF");
+        stickGradient.addColorStop(1, "#AAAAAA");
+        ctx.fillStyle = stickGradient;
+        ctx.fillRect(cx - stickW/2, cy, stickW, h / 2);
+
+        // 本家の PathShadow
+        ctx.fillStyle = "#AAAAAA";
+        ctx.beginPath();
+        ctx.moveTo(cx - stickW/2, cy);
+        ctx.lineTo(cx + stickW/2, cy);
+        ctx.lineTo(cx + stickW/2, cy + size/2 + 1.5 * stickW);
+        ctx.lineTo(cx - stickW/2, cy + size/2);
+        ctx.fill();
+        ctx.restore();
+
+        // ロリポップ本体
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.scale(platLogo.scale, platLogo.scale);
+
+        // ベース円色 (FLAVORS[colorIdx])
+        ctx.fillStyle = FLAVORS[platLogo.colorIdx];
+        ctx.beginPath();
+        ctx.arc(0, 0, size/2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // リップル効果層 (FLAVORS[colorIdx + 1])
+        ctx.fillStyle = FLAVORS[platLogo.colorIdx + 1];
+        ctx.beginPath();
+        ctx.arc(0, 0, size * 0.45, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 本家の l_platlogo テキストロゴ描画
+        if (isReady(assets['l_platlogo'])) {
+            ctx.save();
+            ctx.globalAlpha = platLogo.logoAlpha;
+            ctx.drawImage(assets['l_platlogo'], -size/2, -size/2, size, size);
+            ctx.restore();
+        } else {
+            // テキストロゴのフォールバック
+            ctx.fillStyle = `rgba(255,255,255,${platLogo.logoAlpha})`;
+            ctx.font = `bold ${size * 0.18}px sans-serif`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("lollipop", 0, 0);
+        }
+
+        // 本家 Overlay ハイライト (0x10FFFFFF OvalShape: キャンディ円領域と一致する大きさ)
+        ctx.fillStyle = "rgba(255, 255, 255, 0.0625)";
+        ctx.beginPath();
+        ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+
+    } else {
+        // --- LLand (ゲームプレイ画面) ---
+        ctx.save();
+        if (mFlipped) {
+            ctx.translate(w, 0);
+            ctx.scale(-1, 1);
+        }
+
+        // 空の背景グラデーション
+        let skyGradient = ctx.createLinearGradient(0, h, 0, 0);
+        skyGradient.addColorStop(0, SKIES[mTimeOfDay][0]);
+        skyGradient.addColorStop(1, SKIES[mTimeOfDay][1]);
+        ctx.fillStyle = skyGradient;
+        ctx.fillRect(0, 0, w, h);
+
+        // 背景オブジェクト
+        sceneryList.forEach(s => {
+            if (s.type === 'sun' && isReady(assets['l_sun'])) {
+                ctx.drawImage(assets['l_sun'], s.x, s.y, s.w, s.w);
+            } else if (s.type === 'moon' && isReady(assets['l_moon'])) {
+                ctx.save();
+                ctx.globalAlpha = s.alpha;
+                ctx.translate(s.x + 22.5, s.y + 22.5);
+                ctx.scale(s.r, 1);
+                ctx.rotate(s.rot * Math.PI / 180);
+                ctx.drawImage(assets['l_moon'], -22.5, -22.5, 45, 45);
+                ctx.restore();
+            } else if (s.type === 'star') {
+                ctx.fillStyle = "#FFFFFF";
+                ctx.fillRect(s.x, s.y, s.w, s.w);
+            } else if (s.type === 'cloud') {
+                let cImg = s.off ? assets['l_cloud_off'] : assets['l_cloud'];
+                if (isReady(cImg)) {
+                    ctx.globalAlpha = 0.25;
+                    ctx.drawImage(cImg, s.x, s.y, s.w, s.w * 0.6);
+                    ctx.globalAlpha = 1;
+                }
+            } else if (s.type === 'building') {
+                ctx.fillStyle = s.c;
+                ctx.fillRect(s.x, s.y - s.h, s.w, s.h);
+            }
+        });
+
+        // 障害物 (Stem & Pop)
+        obstaclesInPlay.forEach(ob => {
+            if (ob.type === 'stem') {
+                let g = ctx.createLinearGradient(ob.x, 0, ob.x + ob.w, 0);
+                g.addColorStop(0, "#FFFFFF");
+                g.addColorStop(0.75, "#FFFFFF");
+                g.addColorStop(1, "#AAAAAA");
+                ctx.fillStyle = g;
+                ctx.fillRect(ob.x, ob.y, ob.w, ob.h);
+
+                if (ob.shadow) {
+                    ctx.fillStyle = "#AAAAAA";
+                    ctx.beginPath();
+                    ctx.moveTo(ob.x, ob.y);
+                    ctx.lineTo(ob.x + ob.w, ob.y);
+                    ctx.lineTo(ob.x + ob.w, ob.y + PARAMS.OBSTACLE_WIDTH/2 + ob.w * 1.5);
+                    ctx.lineTo(ob.x, ob.y + PARAMS.OBSTACLE_WIDTH/2);
+                    ctx.fill();
+                }
+            } else if (ob.type === 'pop') {
+                ctx.save();
+                ctx.translate(ob.x + ob.w/2, ob.y + ob.w/2);
+                ctx.scale(ob.flip, 1);
+                ctx.rotate(ob.rot * Math.PI / 180);
+
+                let popObj = POPS[ob.popType];
+                let imgAsset = assets[popObj.name];
+                let cMain = FLAVORS[ob.flavorIdx];
+                let cSub = FLAVORS[ob.flavorIdx + 1];
+
+                drawLollipopPattern(ctx, ob.popType, ob.w, cMain, cSub, imgAsset);
+
+                ctx.restore();
+            }
+        });
+
+        // プレイヤー (Androidドロイド君)
+        ctx.save();
+        ctx.translate(droid.x + PARAMS.PLAYER_SIZE/2, droid.y + PARAMS.PLAYER_SIZE/2);
+        ctx.rotate(droid.rotation * Math.PI / 180);
+        ctx.scale(droid.scale, droid.scale);
+        
+        if (isReady(assets['l_android'])) {
+            ctx.drawImage(assets['l_android'], -PARAMS.PLAYER_SIZE/2, -PARAMS.PLAYER_SIZE/2, PARAMS.PLAYER_SIZE, PARAMS.PLAYER_SIZE);
+        } else {
+            let pSize = PARAMS.PLAYER_SIZE;
+            ctx.fillStyle = "#a4c639";
+            ctx.beginPath();
+            ctx.arc(0, -pSize*0.1, pSize*0.35, Math.PI, 0);
+            ctx.fill();
+            ctx.fillRect(-pSize*0.35, -pSize*0.05, pSize*0.7, pSize*0.45);
+        }
+        ctx.restore();
+
+        ctx.restore();
+
+        // --- スコアカード (HUD) 描画 ---
+        ctx.save();
+        ctx.translate(16, scoreHudY);
+
+        let cardW = 100, cardH = 60;
+        let isGameOver = (currentState === STATE_GAMEOVER);
+
+        ctx.fillStyle = isGameOver ? "rgba(220, 50, 50, 0.9)" : "rgba(0, 0, 0, 0.4)";
+        ctx.strokeStyle = isGameOver ? "#FFFFFF" : "rgba(255, 255, 255, 0.3)";
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+        ctx.roundRect(0, 0, cardW, cardH, 12);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = isGameOver ? "#FFFFFF" : "#AAAAAA";
+        ctx.font = "bold 32px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(mScore.toString(), cardW / 2, cardH / 2);
+
+        ctx.restore();
+    }
+}
+
+// アニメーションループ開始
+requestAnimationFrame(step);
+
+</script>
+</body>
+</html>
