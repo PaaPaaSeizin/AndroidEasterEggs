@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Dessert Case (Android 4.4 Easter Egg)</title>
+    <style>
+        :root {
+            --bg-color: #000000;
+            --red-bg: #ed1d24; /* BGCOLOR from Java */
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: sans-serif;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* --- PlatLogoActivity (Intro) --- */
+        #platlogo-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.75); /* 0xC0000000 */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+        #platlogo-bg {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: var(--red-bg);
+            opacity: 0;
+            transform-origin: center;
+            transform: scaleX(0.01);
+        }
+        #letter {
+            position: absolute;
+            font-size: 30vh;
+            font-weight: bold;
+            color: #FFFFFF;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #logo {
+            position: absolute;
+            height: 40vmin;
+            object-fit: contain;
+            visibility: hidden;
+            opacity: 0;
+            transform: scale(0.5);
+        }
+        #tv {
+            position: absolute;
+            bottom: 10vh;
+            font-size: 5vmin;
+            font-weight: 300;
+            color: #FFFFFF;
+            text-transform: uppercase;
+            visibility: hidden;
+            opacity: 0;
+            letter-spacing: 2px;
+        }
+
+        /* --- DessertCaseView (Main Grid) --- */
+        #dessertcase-wrapper {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: none;
+            overflow: hidden;
+            background-color: #000000;
+        }
+        #dessertcase-container {
+            position: absolute;
+            left: 50%; top: 50%;
+            transform-origin: center;
+        }
+        .dessert-cell {
+            position: absolute;
+            left: 0; top: 0;
+            transform-origin: center center;
+            will-change: transform, opacity;
+        }
+        .dessert-img {
+            width: 100%; height: 100%;
+            object-fit: cover;
+            /* 黒背景透過しつつ白を維持する魔法の設定 (JavaのMASK/ALPHA_MASK代替) */
+            mix-blend-mode: screen; 
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- PlatLogoActivity -->
+    <div id="platlogo-container">
+        <div id="platlogo-bg"></div>
+        <div id="letter">K</div>
+        <img id="logo" src="k_platlogo.webp" alt="Android Logo" draggable="false">
+        <div id="tv">Android 4.4</div>
+    </div>
+
+    <!-- DessertCaseView -->
+    <div id="dessertcase-wrapper">
+        <div id="dessertcase-container"></div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. Strings & Constants (from XML & Java)
+        // ==========================================
+        const START_DELAY = 4000;
+        const DELAY = 3000;
+        const DURATION = 500;
+        const CELL_SIZE = 192;
+        const SCALE = 0.25;
+        const PROB_2X = 0.15;
+        const PROB_3X = 0.03;
+        const PROB_4X = 0.005;
+
+        // Image Arrays
+        const PASTRIES = [
+            'k_dessert_kitkat.webp', 'k_dessert_android.webp'
+        ];
+        const RARE_PASTRIES = [
+            'k_dessert_cupcake.webp', 'k_dessert_donut.webp', 'k_dessert_eclair.webp',
+            'k_dessert_froyo.webp', 'k_dessert_gingerbread.webp', 'k_dessert_honeycomb.webp',
+            'k_dessert_ics.webp', 'k_dessert_jellybean.webp'
+        ];
+        const XRARE_PASTRIES = [
+            'k_dessert_petitfour.webp', 'k_dessert_donutburger.webp',
+            'k_dessert_flan.webp', 'k_dessert_keylimepie.webp'
+        ];
+        const XXRARE_PASTRIES = [
+            'k_dessert_zombiegingerbread.webp', 'k_dessert_dandroid.webp', 'k_dessert_jandycane.webp'
+        ];
+
+        // Random Utils
+        const frand = (a = 0, b = 1) => Math.random() * (b - a) + a;
+        const irand = (a, b) => Math.floor(frand(a, b));
+        const pick = (arr) => arr[irand(0, arr.length)];
+
+        // ==========================================
+        // 2. PlatLogoActivity Logic
+        // ==========================================
+        const platlogoContainer = document.getElementById('platlogo-container');
+        const bg = document.getElementById('platlogo-bg');
+        const letter = document.getElementById('letter');
+        const logo = document.getElementById('logo');
+        const tv = document.getElementById('tv');
+
+        let clicks = 0;
+        let platlogoLongPressTimer;
+        let isPlatlogoLongPress = false;
+        let letterRot = 0;
+
+        platlogoContainer.addEventListener('pointerdown', (e) => {
+            isPlatlogoLongPress = false;
+            platlogoLongPressTimer = setTimeout(() => {
+                isPlatlogoLongPress = true;
+                handlePlatlogoLongClick(e.target);
+            }, 600); // long click threshold
+        });
+
+        platlogoContainer.addEventListener('pointerup', (e) => {
+            clearTimeout(platlogoLongPressTimer);
+            if (!isPlatlogoLongPress) {
+                handlePlatlogoClick(e.target);
+            }
+        });
+        platlogoContainer.addEventListener('pointerleave', () => clearTimeout(platlogoLongPressTimer));
+        platlogoContainer.addEventListener('pointercancel', () => clearTimeout(platlogoLongPressTimer));
+
+        function handlePlatlogoClick(target) {
+            clicks++;
+            if (clicks >= 6) {
+                handlePlatlogoLongClick(platlogoContainer);
+                return;
+            }
+            // Animate Letter
+            let rot = (Math.random() > 0.5 ? 360 : -360);
+            letter.animate([
+                { transform: `rotate(${letterRot}deg)` },
+                { transform: `rotate(${letterRot + rot}deg)` }
+            ], { duration: 700, easing: 'cubic-bezier(0, 0, 0.2, 1)', fill: 'forwards' }); // Decelerate
+            letterRot += rot;
+        }
+
+        function handlePlatlogoLongClick(target) {
+            if (logo.style.visibility !== 'visible') {
+                // Reveal background and Logo
+                bg.animate([
+                    { transform: 'scaleX(0.01)', opacity: 0 },
+                    { transform: 'scaleX(1)', opacity: 1 }
+                ], { duration: 500, delay: 500, fill: 'forwards' });
+
+                letter.animate([
+                    { transform: `rotate(${letterRot}deg) scale(1)`, opacity: 1 },
+                    { transform: `rotate(${letterRot + 360}deg) scale(0.5)`, opacity: 0 }
+                ], { duration: 1000, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' });
+
+                logo.style.visibility = 'visible';
+                logo.animate([
+                    { transform: 'scale(0.5)', opacity: 0 },
+                    { transform: 'scale(1)', opacity: 1 }
+                ], { duration: 1000, delay: 500, easing: 'cubic-bezier(0.68, -0.55, 0.265, 1.55)', fill: 'forwards' });
+
+                tv.style.visibility = 'visible';
+                tv.animate([
+                    { opacity: 0 }, { opacity: 1 }
+                ], { duration: 1000, delay: 1000, fill: 'forwards' });
+            } else if (isPlatlogoLongPress && (target === logo || target.closest('#logo') || target === platlogoContainer)) {
+                // Start DessertCase (ロゴ表示後に長押しされた場合のみタイル画面へ)
+                platlogoContainer.style.display = 'none';
+                document.getElementById('dessertcase-wrapper').style.display = 'block';
+                onSizeChanged();
+                startDessertCase();
+            }
+        }
+
+        // ==========================================
+        // 3. DessertCaseView Logic
+        // ==========================================
+        const dessertContainer = document.getElementById('dessertcase-container');
+        let mStarted = false;
+        let mWidth, mHeight, mRows, mColumns;
+        let mCells = [];
+        let mFreeList = new Set();
+        let mJuggleInterval, delayFillFreeListTimer;
+        let zIndexCounter = 1;
+
+        function hsvToRgb(h, s, v) {
+            let c = v * s;
+            let x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+            let m = v - c;
+            let r=0, g=0, b=0;
+            if (h >= 0 && h < 60) { r = c; g = x; b = 0; }
+            else if (h >= 60 && h < 120) { r = x; g = c; b = 0; }
+            else if (h >= 120 && h < 180) { r = 0; g = c; b = x; }
+            else if (h >= 180 && h < 240) { r = 0; g = x; b = c; }
+            else if (h >= 240 && h < 300) { r = x; g = 0; b = c; }
+            else { r = c; g = 0; b = x; }
+            return `rgb(${Math.round((r + m) * 255)}, ${Math.round((g + m) * 255)}, ${Math.round((b + m) * 255)})`;
+        }
+
+        function random_color() {
+            const COLORS = 12;
+            let h = irand(0, COLORS) * (360 / COLORS);
+            return hsvToRgb(h, 1, 0.85); // HSV(random, 1, 0.85) from Java
+        }
+
+        function onSizeChanged() {
+            let wasStarted = mStarted;
+            if (wasStarted) stopDessertCase();
+
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            // Rescaling container trick: Layout size is naturally huge, scaled down via transform
+            mWidth = w / SCALE;
+            mHeight = h / SCALE;
+
+            dessertContainer.innerHTML = '';
+            mFreeList.clear();
+
+            mRows = Math.ceil(mHeight / CELL_SIZE) + 1;
+            mColumns = Math.ceil(mWidth / CELL_SIZE) + 1;
+            mCells = new Array(mRows * mColumns).fill(null);
+
+            let scaleS = Math.max(mWidth / (CELL_SIZE * mColumns), mHeight / (CELL_SIZE * mRows));
+            let finalScale = SCALE * scaleS;
+
+            dessertContainer.style.width = `${mColumns * CELL_SIZE}px`;
+            dessertContainer.style.height = `${mRows * CELL_SIZE}px`;
+            // Centering layout using translation logic translated to CSS
+            dessertContainer.style.transform = `translate(-50%, -50%) scale(${finalScale})`;
+
+            for (let j = 0; j < mRows; j++) {
+                for (let i = 0; i < mColumns; i++) {
+                    mFreeList.add(`${i},${j}`);
+                }
+            }
+
+            if (wasStarted) startDessertCase();
+        }
+
+        function startDessertCase() {
+            if (!mStarted) {
+                mStarted = true;
+                fillFreeList(DURATION * 4);
+                window.addEventListener('resize', onSizeChanged);
+            }
+            setTimeout(mJuggle, START_DELAY);
+        }
+
+        function stopDessertCase() {
+            mStarted = false;
+            clearTimeout(mJuggleInterval);
+            clearTimeout(delayFillFreeListTimer);
+        }
+
+        function mJuggle() {
+            const children = Array.from(dessertContainer.children);
+            if (children.length > 0) {
+                const child = children[Math.floor(Math.random() * children.length)];
+                place(child, true);
+            }
+            fillFreeList(DURATION);
+            if (mStarted) {
+                mJuggleInterval = setTimeout(mJuggle, DELAY);
+            }
+        }
+
+        function fillFreeList(animationLen = DURATION) {
+            let list = Array.from(mFreeList);
+            while (list.length > 0) {
+                let ptStr = list.shift();
+                mFreeList.delete(ptStr);
+                let [i, j] = ptStr.split(',').map(Number);
+
+                if (mCells[j * mColumns + i] != null) continue;
+
+                let v = document.createElement('div');
+                v.className = 'dessert-cell';
+                v.style.width = `${CELL_SIZE}px`;
+                v.style.height = `${CELL_SIZE}px`;
+                v.style.backgroundColor = random_color();
+                v._state = { pos: null, span: 0, rot: 0, targetX: 0, targetY: 0 };
+
+                let which = frand();
+                let imgSrc = null;
+                if (which < 0.0005) imgSrc = pick(XXRARE_PASTRIES);
+                else if (which < 0.005) imgSrc = pick(XRARE_PASTRIES);
+                else if (which < 0.5) imgSrc = pick(RARE_PASTRIES);
+                else if (which < 0.7) imgSrc = pick(PASTRIES);
+
+                if (imgSrc) {
+                    let img = document.createElement('img');
+                    img.className = 'dessert-img';
+                    img.src = imgSrc;
+                    v.appendChild(img);
+                }
+
+                // Interaction
+                v.addEventListener('pointerdown', () => {
+                    place(v, true);
+                    delayFillFreeListTimer = setTimeout(() => fillFreeList(DURATION), DURATION / 2);
+                });
+
+                dessertContainer.appendChild(v);
+                
+                // Random position setup
+                let pt = { x: i, y: j };
+                placeDirect(v, pt, false);
+
+                if (animationLen > 0) {
+                    let s = v._state.span;
+                    let tx = v._state.targetX;
+                    let ty = v._state.targetY;
+                    let rot = v._state.rot;
+
+                    v.animate([
+                        { transform: `translate(${tx}px, ${ty}px) scale(${s * 0.5}) rotate(${rot}deg)`, opacity: 0 },
+                        { transform: `translate(${tx}px, ${ty}px) scale(${s}) rotate(${rot}deg)`, opacity: 1 }
+                    ], { duration: animationLen, easing: 'ease-out', fill: 'forwards' });
+                }
+            }
+        }
+
+        function getOccupied(v) {
+            let scale = v._state.span;
+            let pt = v._state.pos;
+            if (!pt || scale === 0) return [];
+
+            let result = [];
+            for (let i = 0; i < scale; i++) {
+                for (let j = 0; j < scale; j++) {
+                    result.push({ x: pt.x + i, y: pt.y + j });
+                }
+            }
+            return result;
+        }
+
+        function place(v, animate) {
+            let i = irand(0, mColumns);
+            let j = irand(0, mRows);
+            placeDirect(v, { x: i, y: j }, animate);
+        }
+
+        function placeDirect(v, pt, animate) {
+            let i = pt.x;
+            let j = pt.y;
+            let rnd = frand();
+
+            if (v._state.pos != null) {
+                let occupied = getOccupied(v);
+                for (let oc of occupied) {
+                    mFreeList.add(`${oc.x},${oc.y}`);
+                    mCells[oc.y * mColumns + oc.x] = null;
+                }
+            }
+
+            let scale = 1;
+            if (rnd < PROB_4X) {
+                if (!(i >= mColumns - 3 || j >= mRows - 3)) scale = 4;
+            } else if (rnd < PROB_3X) {
+                if (!(i >= mColumns - 2 || j >= mRows - 2)) scale = 3;
+            } else if (rnd < PROB_2X) {
+                if (!(i === mColumns - 1 || j === mRows - 1)) scale = 2;
+            }
+
+            v._state.pos = pt;
+            v._state.span = scale;
+
+            let tmpSet = new Set();
+            let occupied = getOccupied(v);
+            for (let oc of occupied) {
+                if (oc.x >= mColumns || oc.y >= mRows) continue;
+                let squatter = mCells[oc.y * mColumns + oc.x];
+                if (squatter != null) tmpSet.add(squatter);
+            }
+
+            for (let squatter of tmpSet) {
+                for (let sq of getOccupied(squatter)) {
+                    mFreeList.add(`${sq.x},${sq.y}`);
+                    if (sq.y * mColumns + sq.x < mCells.length) {
+                        mCells[sq.y * mColumns + sq.x] = null;
+                    }
+                }
+                if (squatter !== v) {
+                    squatter._state.pos = null;
+                    if (animate) {
+                        let tx = squatter._state.targetX;
+                        let ty = squatter._state.targetY;
+                        let rot = squatter._state.rot;
+                        let s = squatter._state.span;
+
+                        let anim = squatter.animate([
+                            { transform: `translate(${tx}px, ${ty}px) scale(${s}) rotate(${rot}deg)`, opacity: 1 },
+                            { transform: `translate(${tx}px, ${ty}px) scale(${s * 0.5}) rotate(${rot}deg)`, opacity: 0 }
+                        ], { duration: DURATION, easing: 'cubic-bezier(0.4, 0, 1, 1)' }); // Accelerate
+                        
+                        anim.onfinish = () => squatter.remove();
+                    } else {
+                        squatter.remove();
+                    }
+                }
+            }
+
+            for (let oc of occupied) {
+                if (oc.x < mColumns && oc.y < mRows) {
+                    mCells[oc.y * mColumns + oc.x] = v;
+                    mFreeList.delete(`${oc.x},${oc.y}`);
+                }
+            }
+
+            let rot = irand(0, 4) * 90;
+            // Java coordinate translate format
+            let targetX = i * CELL_SIZE + (scale - 1) * CELL_SIZE / 2;
+            let targetY = j * CELL_SIZE + (scale - 1) * CELL_SIZE / 2;
+
+            if (animate) {
+                v.style.zIndex = ++zIndexCounter;
+                let startX = v._state.targetX || targetX;
+                let startY = v._state.targetY || targetY;
+                let startScale = v._state.span || scale;
+                let startRot = v._state.rot || 0;
+
+                let anim = v.animate([
+                    { transform: `translate(${startX}px, ${startY}px) scale(${startScale}) rotate(${startRot}deg)` },
+                    { transform: `translate(${targetX}px, ${targetY}px) scale(${scale}) rotate(${rot}deg)` }
+                ], { duration: DURATION, easing: 'cubic-bezier(0.68, -0.55, 0.265, 1.55)', fill: 'forwards' }); // AnticipateOvershoot
+            } else {
+                v.style.transform = `translate(${targetX}px, ${targetY}px) scale(${scale}) rotate(${rot}deg)`;
+            }
+
+            v._state.targetX = targetX;
+            v._state.targetY = targetY;
+            v._state.rot = rot;
+        }
+
+    </script>
+</body>
+</html>
